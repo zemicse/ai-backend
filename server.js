@@ -7,8 +7,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// DEBUG: kontrollera att API-nyckeln laddas
+console.log("✅ DEEPSEEK_API_KEY laddad:", !!process.env.DEEPSEEK_API_KEY);
+
 app.post("/ask", async (req, res) => {
-  const userInput = req.body.message;
+  console.log("Incoming body:", req.body);
+  const userInput = req.body.prompt;
+  console.log("userInput:", userInput);
+
+  if (!userInput) {
+    return res.status(400).json({ error: "Prompt saknas i request body" });
+  }
 
   try {
     const response = await axios.post(
@@ -28,8 +37,8 @@ app.post("/ask", async (req, res) => {
     const reply = response.data.choices[0].message.content;
     res.json({ reply });
   } catch (error) {
-    console.error("API error:", error.response?.data || error.message);
-    res.status(500).json({ error: "Något gick fel" });
+    console.error("🛑 API-fel:", error.response?.data || error.message);
+    res.status(500).json({ error: "Något gick fel vid API-anropet" });
   }
 });
 
