@@ -1,48 +1,49 @@
 const express = require("express");
 const axios = require("axios");
-const cors = require("cors");
-require("dotenv").config();
-
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// DEBUG: kontrollera att API-nyckeln laddas
-console.log("✅ DEEPSEEK_API_KEY laddad:", !!process.env.DEEPSEEK_API_KEY);
+// Exempeldata med företag per kategori
+const företagPerKategori = {
+  flytt: ["Pooya AB", "Flyttexperterna AB", "Snabba Flyttar"],
+  trädgård: ["Gröna Fingrar AB", "Trädgårdsmästarna AB"],
+  städning: ["Rent & Fint AB", "Städproffsen AB"],
+  bygg: ["Bygg & Fix AB", "Hantverkarna AB"],
+  // Lägg till fler kategorier och företag här
+};
+
+// Funktion för att matcha kategori baserat på input-text
+function hittaKategori(text) {
+  const textLower = text.toLowerCase();
+  if (textLower.includes("flytt") || textLower.includes("piano")) return "flytt";
+  if (textLower.includes("trädgård") || textLower.includes("gräsmatta")) return "trädgård";
+  if (textLower.includes("städning") || textLower.includes("städa")) return "städning";
+  if (textLower.includes("bygg") || textLower.includes("renovera")) return "bygg";
+  // Lägg till fler regler här
+  return null; // Kategori ej hittad
+}
 
 app.post("/ask", async (req, res) => {
-  console.log("Incoming body:", req.body);
   const userInput = req.body.prompt;
-  console.log("userInput:", userInput);
-
   if (!userInput) {
-    return res.status(400).json({ error: "Prompt saknas i request body" });
+    return res.status(400).json({ error: "Prompt saknas" });
   }
 
-  try {
-    const response = await axios.post(
-      "https://api.deepseek.com/v1/chat/completions",
-      {
-        model: "deepseek-chat",
-        messages: [{ role: "user", content: userInput }],
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+  // Försök matcha kategori
+  const kategori = hittaKategori(userInput);
 
-    const reply = response.data.choices[0].message.content;
-    res.json({ reply });
-  } catch (error) {
-    console.error("🛑 API-fel:", error.response?.data || error.message);
-    res.status(500).json({ error: "Något gick fel vid API-anropet" });
+  if (kategori && företagPerKategori[kategori]) {
+    // Returnera företag från vår fasta lista för kategorin
+    const företag = företagPerKategori[kategori][0]; // Väljer första företaget som "bäst"
+    return res.json({ reply: företag });
   }
+
+  // Om ingen kategori hittas, kan vi låta AI:n svara fritt (valfritt)
+  // Eller returnera ett generellt svar:
+  return res.json({ reply: "Tyvärr, jag kan inte hitta något företag som passar för din förfrågan just nu." });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servern körs på http://localhost:${PORT}`);
+  console.log(`Servern körs på port ${PORT}`);
 });
