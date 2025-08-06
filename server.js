@@ -55,17 +55,18 @@ app.post("/ask", async (req, res) => {
       .map(f => f.namn);
 
     if (matchandeFöretag.length > 0) {
+      const svar = `Okej! Du behöver hjälp med ${kategori}. Här är tre rekommenderade företag för dig:`;
       return res.json({
-        message: "Här är de bästa företagen för dig:",
+        message: svar,
         reply: matchandeFöretag
       });
     }
   }
 
-  // Fallback till AI (om ingen kategori)
+  // Fallback till AI
   const systemMessage = {
     role: "system",
-    content: `Du är en assistent som hjälper användare att hitta företag i Sverige baserat på deras behov. Svara med max tre relevanta företagsnamn i punktlista. Inga emojis eller förklaringar.`
+    content: `Du är en vänlig och professionell svensk assistent som hjälper användare att hitta rätt tjänster (som flytt, städning, målning etc). Sammanfatta kort vad användaren behöver hjälp med, be dem fylla i detaljer (som datum, plats, bilder), och berätta att du kan matcha dem med en pålitlig utförare. Använd ett naturligt, hjälpsamt och tillmötesgående tonläge. Undvik emojis.`
   };
 
   try {
@@ -88,15 +89,9 @@ app.post("/ask", async (req, res) => {
 
     let reply = response.data.choices[0].message.content.trim();
 
-    // Ta bort emojis
-    reply = reply.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uDBFF\uDC00-\uDFFF])+/g, "");
-
-    // Dela upp AI-svaret i flera rader
-    let replyArray = reply.split(/\n|,|;/).map(s => s.trim()).filter(Boolean).slice(0, 3);
-
     res.json({
-      message: "Här är de bästa företagen för dig:",
-      reply: replyArray
+      message: null, // Inget separat meddelande, AI:n svarar helt
+      reply
     });
   } catch (error) {
     console.error("🛑 Fel vid AI-anrop:", error.response?.data || error.message);
