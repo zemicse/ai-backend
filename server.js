@@ -49,21 +49,23 @@ app.post("/ask", async (req, res) => {
   const kategori = hittaKategori(userInput);
 
   if (kategori) {
-    // Hämta upp till 3 företag i kategorin
     const matchandeFöretag = företag
       .filter(f => f.kategori === kategori)
       .slice(0, 3)
       .map(f => f.namn);
 
     if (matchandeFöretag.length > 0) {
-      return res.json({ reply: matchandeFöretag });
+      return res.json({
+        message: "Här är de bästa företagen för dig:",
+        reply: matchandeFöretag
+      });
     }
   }
 
   // Fallback till AI (om ingen kategori)
   const systemMessage = {
     role: "system",
-    content: `Du är en assistent som endast svarar med företagsnamnet som passar bäst för användarens fråga. Svara endast med företagsnamnet på svenska. Inga emojis, inga andra ord.`
+    content: `Du är en assistent som hjälper användare att hitta företag i Sverige baserat på deras behov. Svara med max tre relevanta företagsnamn i punktlista. Inga emojis eller förklaringar.`
   };
 
   try {
@@ -89,13 +91,13 @@ app.post("/ask", async (req, res) => {
     // Ta bort emojis
     reply = reply.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|[\uD83C-\uDBFF\uDC00-\uDFFF])+/g, "");
 
-    // Om AI svarar med flera namn separerade med ny rad eller kommatecken, splittra till array
-    let replyArray = reply.split(/\n|,|;/).map(s => s.trim()).filter(Boolean);
+    // Dela upp AI-svaret i flera rader
+    let replyArray = reply.split(/\n|,|;/).map(s => s.trim()).filter(Boolean).slice(0, 3);
 
-    // Skicka max 3
-    replyArray = replyArray.slice(0, 3);
-
-    res.json({ reply: replyArray });
+    res.json({
+      message: "Här är de bästa företagen för dig:",
+      reply: replyArray
+    });
   } catch (error) {
     console.error("🛑 Fel vid AI-anrop:", error.response?.data || error.message);
     res.status(500).json({ error: "Fel vid AI-anrop" });
