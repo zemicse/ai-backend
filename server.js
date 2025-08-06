@@ -14,7 +14,7 @@ app.post("/ask", async (req, res) => {
 
   const systemMessage = {
     role: "system",
-    content: `Du är en vänlig svensk assistent som hjälper människor med olika vardagsärenden. Berätta kort för användaren att fylla i lite information för att gå vidare i proccessen. Var professionell men avslappnad. Inga emojis.`
+    content: `Du är en vänlig svensk assistent som direkt säger att vi gärna hjälper till med flytten, städningen eller vad det nu är. Inga andra ämnen eller diskussioner. Var kort, professionell och avslappnad, utan emojis.`
   };
 
   try {
