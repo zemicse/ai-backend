@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Mallar för olika kategorier
+// Svarsmallar för olika ärendekategorier
 const templates = {
   flytt: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}.",
   städning: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}.",
@@ -17,7 +17,6 @@ const templates = {
   default: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}."
 };
 
-// Funktion för att använda rätt mall + fylla i beskrivning
 function renderTemplate(kategori, beskrivning) {
   const template = templates[kategori.toLowerCase()] || templates["default"];
   return template.replace("{{beskrivning}}", beskrivning);
@@ -29,7 +28,6 @@ app.post("/ask", async (req, res) => {
     return res.status(400).json({ error: "Prompt saknas" });
   }
 
-  // AI får i uppgift att returnera kategori + användarformulering
   const systemMessage = {
     role: "system",
     content: `Du är en svensk assistent. Du får en användarfråga som handlar om att få hjälp med något (t.ex. flytt, städning, rörmokare).
@@ -37,22 +35,6 @@ Svar endast med ett JSON-objekt i följande format:
 {
   "kategori": "kort kategori för ärendet", 
   "beskrivning": "vad användaren behöver hjälp med, i naturligt språk"
-}
-
-Exempel 1:
-User: "Jag behöver hjälp att flytta ett piano"
-Svar:
-{
-  "kategori": "pianoflytt",
-  "beskrivning": "flytta ett piano"
-}
-
-Exempel 2:
-User: "Vi har stopp i avloppet"
-Svar:
-{
-  "kategori": "rörmokare",
-  "beskrivning": "stopp i avloppet"
 }
 
 Inga andra kommentarer. Endast JSON.`
@@ -76,16 +58,31 @@ Inga andra kommentarer. Endast JSON.`
       }
     );
 
-    // Försök parsa AI:ns svar som JSON
+    const rawAiReply = response.data.choices[0].message.content.trim();
+
+    // Logga AI:s råsvar
+    console.log("🔍 AI-svar (råtext):", rawAiReply);
+
     let parsed;
     try {
-      parsed = JSON.parse(response.data.choices[0].message.content.trim());
+      parsed = JSON.parse(rawAiReply);
     } catch (err) {
-      console.error("Kunde inte tolka AI-svaret som JSON:", response.data.choices[0].message.content);
-      return res.status(500).json({ error: "Kunde inte tolka AI-svar" });
+      console.error("❌ Kunde inte tolka AI-svaret som JSON:", rawAiReply);
+      return res.status(500).json({
+        error: "Kunde inte tolka AI-svar som JSON",
+        rawReply: rawAiReply
+      });
     }
 
     const { kategori, beskrivning } = parsed;
+
+    if (!kategori || !beskrivning) {
+      return res.status(500).json({
+        error: "Ofullständigt AI-svar",
+        rawReply: rawAiReply
+      });
+    }
+
     const reply = renderTemplate(kategori, beskrivning);
 
     res.json({
@@ -96,8 +93,11 @@ Inga andra kommentarer. Endast JSON.`
     });
 
   } catch (error) {
-    console.error("Fel vid AI-anrop:", error.response?.data || error.message);
-    res.status(500).json({ error: "Fel vid AI-anrop" });
+    console.error("🚨 Fel vid AI-anrop:", error.response?.data || error.message);
+    res.status(500).json({
+      error: "Fel vid AI-anrop",
+      details: error.response?.data || error.message
+    });
   }
 });
 
