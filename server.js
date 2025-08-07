@@ -1,26 +1,11 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+require("dotenv").config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// Svarsmallar för olika ärendekategorier
-const templates = {
-  flytt: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}.",
-  städning: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}.",
-  pianoflytt: "Här kommer de bästa företagen för att {{beskrivning}}.",
-  magasinering: "Här är rekommenderade företag som erbjuder {{beskrivning}}.",
-  kontorsflytt: "Här är företag som är bra på att hjälpa till med {{beskrivning}}.",
-  rörmokare: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}.",
-  default: "Här är de bästa företagen som kan hjälpa dig med {{beskrivning}}."
-};
-
-function renderTemplate(kategori, beskrivning) {
-  const template = templates[kategori.toLowerCase()] || templates["default"];
-  return template.replace("{{beskrivning}}", beskrivning);
-}
 
 app.post("/ask", async (req, res) => {
   const userInput = req.body.prompt;
@@ -30,14 +15,13 @@ app.post("/ask", async (req, res) => {
 
   const systemMessage = {
     role: "system",
-    content: `Du är en svensk assistent. Du får en användarfråga som handlar om att få hjälp med något (t.ex. flytt, städning, rörmokare).
-Svar endast med ett JSON-objekt i följande format:
-{
-  "kategori": "kort kategori för ärendet", 
-  "beskrivning": "vad användaren behöver hjälp med, i naturligt språk"
-}
+    content: `Du är en hjälpsam och trevlig svensk assistent som svarar på förfrågningar om olika typer av hjälp (t.ex. flytt, städning, rörmokare, transport osv). 
+    
+Svara alltid med ett färdigt, naturligt, vänligt meddelande i samma stil som:
 
-Inga andra kommentarer. Endast JSON.`
+"Såklart ska du ha hjälp med att [användarens behov]. Innan vi hittar de företagen som passar dig bäst skulle vi behöva lite ytterligare information."
+
+Anpassa frasen efter behovet som nämns, men håll tonen avslappnad, tydlig och professionell. Max 2 meningar. Inga emojis.`
   };
 
   try {
@@ -58,42 +42,22 @@ Inga andra kommentarer. Endast JSON.`
       }
     );
 
-    const rawAiReply = response.data.choices[0].message.content.trim();
+    const rawReply = response.data.choices?.[0]?.message?.content?.trim();
 
-    // Logga AI:s råsvar
-    console.log("🔍 AI-svar (råtext):", rawAiReply);
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawAiReply);
-    } catch (err) {
-      console.error("❌ Kunde inte tolka AI-svaret som JSON:", rawAiReply);
-      return res.status(500).json({
-        error: "Kunde inte tolka AI-svar som JSON",
-        rawReply: rawAiReply
-      });
+    if (!rawReply) {
+      console.error("⚠️ AI:n gav inget svar:", response.data);
+      return res.status(500).json({ error: "AI:n gav inget svar." });
     }
 
-    const { kategori, beskrivning } = parsed;
-
-    if (!kategori || !beskrivning) {
-      return res.status(500).json({
-        error: "Ofullständigt AI-svar",
-        rawReply: rawAiReply
-      });
-    }
-
-    const reply = renderTemplate(kategori, beskrivning);
+    console.log("✅ AI-svar:", rawReply);
 
     res.json({
       userPrompt: userInput,
-      interpretedCategory: kategori,
-      interpretedDescription: beskrivning,
-      reply
+      reply: rawReply
     });
 
   } catch (error) {
-    console.error("🚨 Fel vid AI-anrop:", error.response?.data || error.message);
+    console.error("❌ Fel vid AI-anrop:", error.response?.data || error.message);
     res.status(500).json({
       error: "Fel vid AI-anrop",
       details: error.response?.data || error.message
