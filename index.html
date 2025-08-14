@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offerta-liknande Progressbar i Kort</title>
+<style>
+  body { font-family: sans-serif; background-color: #eef6f1; display: flex; justify-content: center; padding: 40px; }
+  .card { background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px; width: 100%; max-width: 700px; }
+  .progress-wrapper { position: relative; margin-bottom: 40px; }
+  .progress-bg { position: absolute; top: 10px; left: 0; width: 100%; height: 4px; background-color: #c8e6d8; border-radius: 2px; z-index: 1; }
+  .progress-fill { position: absolute; top: 10px; left: 0; height: 4px; background-color: #4caf50; border-radius: 2px; z-index: 2; transition: width 0.3s ease; }
+  .progress-container { display: flex; justify-content: space-between; position: relative; z-index: 3; }
+  .step { display: flex; flex-direction: column; align-items: center; flex: 1; }
+  .circle { width: 20px; height: 20px; background-color: #c8e6d8; border-radius: 50%; transition: background-color 0.3s ease, transform 0.3s ease; }
+  .active .circle, .completed .circle { background-color: #4caf50; transform: scale(1.1); }
+  .step p { margin-top: 8px; font-size: 14px; font-weight: bold; color: #333; }
+  .controls { text-align: center; margin-top: 20px; justify-content: space-between; align-items: center; padding: 0 20px; display: flex; }
+  button { padding: 8px 16px; margin: 0 5px; border: none; background-color: #4caf50; color: white; font-size: 14px; border-radius: 4px; cursor: pointer; }
+  button:disabled { background-color: #c8e6d8; cursor: not-allowed; }
+  .content { min-height: 200px; background: #f9fdfb; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  #imagePreview img { width: 100px; margin: 5px; border-radius: 4px; }
+  #aiResult ul { padding-left: 20px; }
+  #aiResult li { margin-bottom: 5px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="progress-wrapper">
+    <div class="progress-bg"></div>
+    <div class="progress-fill" id="progressFill"></div>
+    <div class="progress-container">
+      <div class="step active">
+        <div class="circle"></div>
+        <p>Rekommenderad tjänst</p>
+      </div>
+      <div class="step">
+        <div class="circle"></div>
+        <p>Information</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="content" id="contentBox">
+    <p>Här kan du se rekommenderade tjänster.</p>
+  </div>
+
+  <div class="controls">
+    <button id="prevBtn" disabled>← Tillbaka</button>
+    <button id="nextBtn">Nästa →</button>
+  </div>
+</div>
+
+<script>
+const steps = document.querySelectorAll(".step");
+const progressFill = document.getElementById("progressFill");
+const nextBtn = document.getElementById("nextBtn");
+const prevBtn = document.getElementById("prevBtn");
+const contentBox = document.getElementById("contentBox");
+let currentStep = 0;
+
+function showStepContent() {
+  if (currentStep === 0) {
+    contentBox.innerHTML = "<p>Här kan du se rekommenderade tjänster.</p>";
+  } else if (currentStep === 1) {
+    contentBox.innerHTML = `
+      <label for="imageUpload">Ladda upp bilder för analys:</label>
+      <input type="file" id="imageUpload" multiple>
+      <div id="imagePreview"></div>
+      <div id="aiResult"></div>
+    `;
+    const imageUpload = document.getElementById('imageUpload');
+    const imagePreview = document.getElementById('imagePreview');
+    const aiResult = document.getElementById('aiResult');
+
+    imageUpload.addEventListener('change', async (event) => {
+      const files = event.target.files;
+      imagePreview.innerHTML = '';
+      aiResult.innerHTML = 'Analyserar bilder...';
+
+      Array.from(files).forEach(file => {
+        if (file.type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = e => {
+            const img = document.createElement('img');
+            img.src = e.target.result;
+            imagePreview.appendChild(img);
+          };
+          reader.readAsDataURL(file);
+        }
+      });
+
+      const formData = new FormData();
+      Array.from(files).forEach(file => formData.append('images', file));
+
+      try {
+        const response = await fetch('https://ai-backend-zgc4.onrender.com/ask', {
+          method: 'POST',
+          body: formData
+        });
+        if (response.ok) {
+          const data = await response.json();
+          aiResult.innerHTML = '';
+
+          // Visa snyggt som lista
+          const ul = document.createElement('ul');
+          for (const key in data) {
+            const li = document.createElement('li');
+            li.textContent = `${key}: ${data[key]}`;
+            ul.appendChild(li);
+          }
+          aiResult.appendChild(ul);
+        } else {
+          aiResult.innerHTML = 'Fel vid analys: ' + response.statusText;
+        }
+      } catch (error) {
+        aiResult.innerHTML = 'Fel vid kommunikation med Render: ' + error.message;
+      }
+    });
+  }
+}
+
+function updateProgress() {
+  steps.forEach((step, index) => {
+    step.classList.remove("active", "completed");
+    if (index < currentStep) step.classList.add("completed");
+    if (index === currentStep) step.classList.add("active");
+  });
+  progressFill.style.width = `${(currentStep / (steps.length - 1)) * 100}%`;
+  showStepContent();
+  prevBtn.disabled = currentStep === 0;
+  nextBtn.disabled = currentStep === steps.length - 1;
+}
+
+nextBtn.addEventListener("click", () => {
+  if (currentStep < steps.length - 1) currentStep++;
+  updateProgress();
+});
+
+prevBtn.addEventListener("click", () => {
+  if (currentStep > 0) currentStep--;
+  updateProgress();
+});
+
+updateProgress();
+</script>
+
+</body>
+</html>
