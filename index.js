@@ -1,39 +1,57 @@
 import express from "express";
 import multer from "multer";
 import cors from "cors";
-import fetch from "node-fetch"; // npm i node-fetch
+import fetch from "node-fetch";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
+const port = process.env.PORT || 3000;
+
 app.use(cors());
+app.use(express.json());
+
+// Multer setup för att ta emot bilder
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 app.post("/analyze", upload.array("images"), async (req, res) => {
-  try {
-    const results = [];
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: "No images uploaded" });
+  }
 
-    for (let i = 0; i < req.files.length; i++) {
-      const file = req.files[i];
+  const results = [];
 
-      // Här skickar vi filen till DeepSeek API
-      const response = await fetch("https://api.deepseek.com/analyze", {
+  for (let i = 0; i < req.files.length; i++) {
+    const file = req.files[i];
+
+    try {
+      const response = await fetch("https://api.deepseek.ai/v1/analyze", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+          "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
         },
         body: file.buffer
       });
 
-      const analysis = await response.json();
-      results.push({ imageIndex: i + 1, analysis });
-    }
+      const data = await response.json();
 
-    res.json(results);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Något gick fel vid analysen." });
+      results.push({
+        imageIndex: i + 1,
+        analysis: data
+      });
+    } catch (error) {
+      results.push({
+        imageIndex: i + 1,
+        analysis: { error_msg: error.message }
+      });
+    }
   }
+
+  res.json(results);
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server igång på port", process.env.PORT || 3000);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
