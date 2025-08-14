@@ -1,35 +1,24 @@
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
+const express = require('express');
+const cors = require('cors');
 
 const app = express();
-const port = process.env.PORT || 3000;
-
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // stora bilder
 
-const upload = multer({ storage: multer.memoryStorage() });
+app.post('/ask', (req, res) => {
+    const images = req.body.images || [];
 
-app.post("/analyze-image", upload.single("image"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Ingen bild uppladdad" });
-  }
+    // Demo-analys: beräkna "storlek" = antal bytes i varje bild
+    const analysis = images.map((img, i) => ({
+        imageIndex: i + 1,
+        sizeBytes: Buffer.from(img, 'base64').length
+    }));
 
-  const imageBuffer = req.file.buffer;
-
-  // Här skickar du imageBuffer till Deepseek AI
-  // Exempel: const result = await deepseekAnalyze(imageBuffer);
-
-  // Tillfälligt svar för test
-  const result = {
-    message: "Bild mottagen och analyserad (simulerat svar)",
-    size: "120x80 cm",
-    weight: "15 kg"
-  };
-
-  res.json(result);
+    res.json({
+        message: `Analys färdig! Mottagit ${images.length} bild(er).`,
+        analysis
+    });
 });
 
-app.listen(port, () => {
-  console.log(`Servern kör på port ${port}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server startad på port ${PORT}`));
