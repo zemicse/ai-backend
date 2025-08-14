@@ -1,10 +1,8 @@
-// index.js
 import express from "express";
 import multer from "multer";
 import cors from "cors";
-import fetch from "node-fetch";
-import FormData from "form-data";
 import dotenv from "dotenv";
+import OpenAI from "openai";
 
 dotenv.config();
 
@@ -14,11 +12,14 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Multer setup för att ta emot bilder i minnet
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Endpoint för bildanalys
+// Initiera OpenAI med din nyckel från https://platform.openai.com
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
 app.post("/analyze", upload.array("images"), async (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: "No images uploaded" });
@@ -26,24 +27,35 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 
   const results = [];
 
-  for (const [i, file] of req.files.entries()) {
-    try {
-      const formData = new FormData();
-      formData.append("file", file.buffer, file.originalname);
+  for (let i = 0; i < req.files.length; i++) {
+    const file = req.files[i];
+    const base64Image = file.buffer.toString("base64");
+    const imageUrl = `data:${file.mimetype};base64,${base64Image}`;
 
-      const response = await fetch("https://api.deepseek.com/v1/analyze", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-          ...formData.getHeaders(),
-        },
-        body: formData,
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini", // eller "gpt-4o" om du vill ha max kvalitet
+        messages: [
+          { role: "system", content: "Du är en expert på bildanalys. Beskriv bilden kortfattat på svenska." },
+          { role: "user", content: [
+              { type: "text", text: "Vad ser du på den här bilden?" },
+              { type: "image_url", image_url: imageUrl }
+            ]
+          }
+        ]
       });
 
-      const data = await response.json();
-      results.push({ imageIndex: i + 1, analysis: data });
+      const analysis = completion.choices[0].message.content;
+      results.push({
+        imageIndex: i + 1,
+        analysis
+      });
+
     } catch (error) {
-      results.push({ imageIndex: i + 1, analysis: { error_msg: error.message } });
+      results.push({
+        imageIndex: i + 1,
+        analysis: { error_msg: error.message }
+      });
     }
   }
 
@@ -51,5 +63,5 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Servern körs på port ${port}`);
+  console.log(`🚀 Server running on port ${port}`);
 });
