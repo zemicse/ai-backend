@@ -12,10 +12,11 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Multer setup för filuppladdning
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Initiera OpenAI med din nyckel från https://platform.openai.com
+// Initiera OpenAI-klienten
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -30,25 +31,31 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
   for (let i = 0; i < req.files.length; i++) {
     const file = req.files[i];
     const base64Image = file.buffer.toString("base64");
-    const imageUrl = `data:${file.mimetype};base64,${base64Image}`;
 
     try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini", // eller "gpt-4o" om du vill ha max kvalitet
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "Du är en expert på bildanalys. Beskriv bilden kortfattat på svenska." },
-          { role: "user", content: [
-              { type: "text", text: "Vad ser du på den här bilden?" },
-              { type: "image_url", image_url: imageUrl }
+          {
+            role: "system",
+            content: "You are an expert image analyst. Describe the content of the image in detail."
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Analyze this image and describe it in detail." },
+              {
+                type: "image_url",
+                image_url: `data:${file.mimetype};base64,${base64Image}`
+              }
             ]
           }
         ]
       });
 
-      const analysis = completion.choices[0].message.content;
       results.push({
         imageIndex: i + 1,
-        analysis
+        analysis: response.choices[0].message.content
       });
 
     } catch (error) {
@@ -63,5 +70,5 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
