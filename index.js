@@ -1,4 +1,11 @@
+import express from "express";
+import multer from "multer";
+import cors from "cors";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
 import FormData from "form-data";
+
+dotenv.config();
 
 // ...
 
