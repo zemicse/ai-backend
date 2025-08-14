@@ -1,10 +1,7 @@
 import express from "express";
 import multer from "multer";
 import cors from "cors";
-import dotenv from "dotenv";
 import OpenAI from "openai";
-
-dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -16,7 +13,7 @@ app.use(express.json());
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// Initiera OpenAI-klienten
+// Initiera OpenAI-klienten med API-nyckel från Render miljövariabler
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
