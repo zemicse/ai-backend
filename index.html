@@ -7,7 +7,7 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     #results { margin-top: 20px; }
-    .image-result { margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+    .image-result { margin-bottom: 15px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -42,16 +42,18 @@
           body: formData
         });
 
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Serverfel: ${text}`);
+        }
+
         const data = await response.json();
 
         resultsDiv.innerHTML = '';
         data.forEach(item => {
           const div = document.createElement('div');
           div.className = 'image-result';
-          div.innerHTML = `
-            <strong>Bild ${item.imageIndex}:</strong>
-            <pre>${JSON.stringify(item.analysis, null, 2)}</pre>
-          `;
+          div.innerHTML = `<strong>Bild ${item.imageIndex}:</strong>\n${JSON.stringify(item.analysis, null, 2)}`;
           resultsDiv.appendChild(div);
         });
 
