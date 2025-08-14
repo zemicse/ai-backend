@@ -3,53 +3,47 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DeepSeek Bildanalys</title>
+<title>Bildanalys med AI</title>
 <style>
-body { font-family: sans-serif; background: #eef6f1; display: flex; justify-content: center; padding: 40px; }
-.card { background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px; width: 100%; max-width: 700px; }
-.content { min-height: 200px; background: #f9fdfb; border-radius: 8px; padding: 20px; margin-bottom: 20px; white-space: pre-wrap; }
-input[type="file"] { display: block; margin-bottom: 10px; }
-button { padding: 8px 16px; border: none; background-color: #4caf50; color: white; font-size: 14px; border-radius: 4px; cursor: pointer; }
+  body { font-family: sans-serif; background: #eef6f1; display: flex; justify-content: center; padding: 40px; }
+  .card { background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); padding: 30px; width: 100%; max-width: 700px; }
+  .content { min-height: 200px; background: #f9fdfb; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
 </style>
 </head>
 <body>
+
 <div class="card">
-<h2>Skicka bilder till DeepSeek</h2>
-<div class="content" id="contentBox">Ingen bild skickad ännu.</div>
-<input type="file" id="imageInput" multiple>
-<button id="sendBtn">Skicka bilder</button>
+  <h2>Analys av bild</h2>
+  <div class="content">
+    <input type="file" id="imageInput" multiple>
+    <button id="uploadBtn">Skicka bild(er)</button>
+    <pre id="resultBox"></pre>
+  </div>
 </div>
 
 <script>
-const sendBtn = document.getElementById('sendBtn');
-const imageInput = document.getElementById('imageInput');
-const contentBox = document.getElementById('contentBox');
+const uploadBtn = document.getElementById("uploadBtn");
+const imageInput = document.getElementById("imageInput");
+const resultBox = document.getElementById("resultBox");
 
-sendBtn.addEventListener('click', async () => {
-    const files = imageInput.files;
-    if (!files.length) return alert('Välj minst en bild!');
+uploadBtn.addEventListener("click", async () => {
+  const files = imageInput.files;
+  if (!files.length) return alert("Välj minst en bild!");
 
-    contentBox.textContent = 'Skickar bilder...';
+  const formData = new FormData();
+  for (let i = 0; i < files.length; i++) formData.append("images", files[i]);
 
-    const images = await Promise.all(Array.from(files).map(file => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(',')[1]); // ta bort data:image/... prefix
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    })));
+  resultBox.textContent = "Analys pågår…";
 
-    try {
-        const response = await fetch('https://image-backend-ow2p.onrender.com/ask', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ images })
-        });
-        const data = await response.json();
-        contentBox.textContent = data.message + '\n\n' + JSON.stringify(data.analysis, null, 2);
-    } catch (err) {
-        contentBox.textContent = 'Fel vid skickning: ' + err.message;
-    }
+  const res = await fetch("https://image-backend-ow2p.onrender.com/analyze", {
+    method: "POST",
+    body: formData
+  });
+
+  const data = await res.json();
+  resultBox.textContent = JSON.stringify(data, null, 2);
 });
 </script>
+
 </body>
 </html>
