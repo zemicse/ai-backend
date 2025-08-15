@@ -7,7 +7,7 @@ import http from "http";
 const app = express();
 const port = process.env.PORT || 3000;
 
-// --- Middleware
+// --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
@@ -20,7 +20,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Per-request timeout så klienten får 504 istället för att "hänga"
+// Per-request timeout så klienten får 504 istället för att hänga
 app.use((req, res, next) => {
   res.setTimeout(110_000, () => {
     if (!res.headersSent) {
@@ -34,7 +34,7 @@ app.use((req, res, next) => {
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// OpenAI-klient (API-nyckel via miljövariabel)
+// OpenAI-klient
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -71,7 +71,7 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 
     const results = [];
 
-    // Kör sekventiellt (stabilare på gratis hosting). Vill du parallellisera: använd Promise.all med försiktighet.
+    // Kör sekventiellt (stabilare på gratis hosting)
     for (let i = 0; i < req.files.length; i++) {
       const file = req.files[i];
       const dataUrl = bufferToDataUrl(file.buffer, file.mimetype);
@@ -80,26 +80,30 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
       const timer = setTimeout(() => ac.abort(), 60_000); // avbryt OpenAI-kallet efter 60s
 
       try {
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: "You are an expert image analyst. Describe the content of the image in detail."
-            },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Analyze this image and describe it in detail." },
-                { type: "image_url", image_url: { url: dataUrl } }
-              ]
-            }
-          ],
-          signal: ac.signal
-        });
+        const completion = await openai.chat.completions.create(
+          {
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: "You are an expert image analyst. Describe the content of the image in detail."
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "Analyze this image and describe it in detail." },
+                  { type: "image_url", image_url: { url: dataUrl } }
+                ]
+              }
+            ]
+          },
+          { signal: ac.signal } // ✅ rätt plats för signal
+        );
 
         let analysisText = completion.choices?.[0]?.message?.content || "No description provided";
-        if (typeof analysisText !== "string") analysisText = JSON.stringify(analysisText, null, 2);
+        if (typeof analysisText !== "string") {
+          analysisText = JSON.stringify(analysisText, null, 2);
+        }
 
         results.push({ imageIndex: i + 1, analysis: analysisText });
 
@@ -116,7 +120,9 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 
         results.push({
           imageIndex: i + 1,
-          analysis: `Error: ${humanMsg}\nDetaljer: ${typeof body === "string" ? body : JSON.stringify(body)}`
+          analysis: `Error: ${humanMsg}\nDetaljer: ${
+            typeof body === "string" ? body : JSON.stringify(body)
+          }`
         });
       } finally {
         clearTimeout(timer);
