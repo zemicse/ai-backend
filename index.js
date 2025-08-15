@@ -50,22 +50,24 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
         ]
       });
 
+      // Säkerställ att analys alltid är text
+      let analysisText = response.choices[0]?.message?.content;
+      if (typeof analysisText === "object") {
+        analysisText = JSON.stringify(analysisText, null, 2);
+      }
+
       results.push({
         imageIndex: i + 1,
-        analysis: response.choices[0].message.content
+        analysis: analysisText || "No description provided"
       });
 
     } catch (error) {
       results.push({
         imageIndex: i + 1,
-        analysis: { error_msg: error.message }
+        analysis: error.message || "Unknown error"
       });
     }
   }
 
   res.json(results);
-});
-
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
 });
