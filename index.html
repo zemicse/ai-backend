@@ -7,10 +7,12 @@
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     #results { margin-top: 20px; display: grid; gap: 12px; }
-    .image-result { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; }
+    .image-result { display: grid; grid-template-columns: 120px 1fr; gap: 10px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; }
     .thumb { width: 120px; height: 120px; object-fit: cover; border-radius: 6px; border: 1px solid #eee; }
-    pre { white-space: pre-wrap; word-wrap: break-word; margin: 0; }
     .muted { color: #666; }
+    ul { margin: 4px 0 0 0; padding-left: 20px; }
+    li { margin-bottom: 4px; }
+    strong { display: block; margin-bottom: 4px; }
   </style>
 </head>
 <body>
@@ -26,6 +28,26 @@
     const imageInput = document.getElementById('imageInput');
     const resultsDiv = document.getElementById('results');
 
+    function formatAsList(text) {
+      // Dela upp på rader som börjar med "- " eller "•"
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length);
+      const bulletLines = lines.filter(l => /^[-•]/.test(l));
+
+      if (bulletLines.length >= 2) {
+        const ul = document.createElement('ul');
+        bulletLines.forEach(line => {
+          const li = document.createElement('li');
+          li.textContent = line.replace(/^[-•]\s*/, '');
+          ul.appendChild(li);
+        });
+        return ul;
+      } else {
+        const p = document.createElement('pre');
+        p.textContent = text;
+        return p;
+      }
+    }
+
     analyzeBtn.addEventListener('click', async () => {
       if (!imageInput.files.length) { alert('Välj minst en bild!'); return; }
 
@@ -34,7 +56,6 @@
 
       resultsDiv.textContent = 'Analys pågår...';
 
-      // Avbryt om servern tar för lång tid
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 70_000);
 
@@ -59,20 +80,21 @@
           const wrapper = document.createElement('div');
           wrapper.className = 'image-result';
 
-          // Visa miniatyr av den lokala filen
+          // Miniatyr
           const imgEl = document.createElement('img');
           imgEl.className = 'thumb';
           imgEl.alt = `Bild ${item.imageIndex}`;
           imgEl.src = URL.createObjectURL(imageInput.files[idx]);
 
-          const textEl = document.createElement('div');
-          textEl.innerHTML = `
-            <strong>Bild ${item.imageIndex}:</strong>
-            <pre>${item.analysis}</pre>
-          `;
+          // Text eller punktlista
+          const textContainer = document.createElement('div');
+          const title = document.createElement('strong');
+          title.textContent = `Bild ${item.imageIndex}:`;
+          textContainer.appendChild(title);
+          textContainer.appendChild(formatAsList(item.analysis));
 
           wrapper.appendChild(imgEl);
-          wrapper.appendChild(textEl);
+          wrapper.appendChild(textContainer);
           resultsDiv.appendChild(wrapper);
         });
 

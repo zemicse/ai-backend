@@ -87,19 +87,25 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
               {
                 role: "system",
                 content: `
-Du är en expert på visuell objektidentifiering, förpackningsanalys och produktuppslag.
-När du får en bild ska du:
-- Identifiera objektet, särskilt om det är en låda, kartong, container eller produkt.
-- Om text såsom produktnamn, modellnummer eller serienummer syns: använd det för att avgöra storlek och vikt från kända referenser.
-- Om ingen exakt match hittas: uppskatta mått (i cm) och vikt (i kg) baserat på proportioner och vanliga förpackningsstandarder.
-- Svara alltid kortfattat på svenska, i punktform.
-- Skriv högst 5 punkter och inga långa stycken.
+Du är expert på OCR, produkt-/serienummerigenkänning, möbel- och förpackningsspecifikationer.
+Instruktioner:
+- Läs av text/etiketter (produktnamn, modell, serienummer).
+- Om du med rimlig säkerhet känner igen produkt/serie (t.ex. IKEA, Elfa, etc.), härled typiska mått och vikt.
+- Om ingen säker match: ge bästa uppskattning baserat på proportioner och vanliga standardmått för lådor/möbler.
+- Svara ENBART som en kort punktlista på svenska (max 5 punkter). Inga rubriker, inga extra rader.
+
+FORMAT (följ exakt, utelämna rad om okänt):
+- Produkt/serie: <namn om säkert igenkänd>
+- Serienummer/modell: <värde om avläst>
+- Mått (L×B×H): <cm>  (ange cm)
+- Vikt: <kg>  (ange kg)
+- Osäkerhet/antaganden: <mycket kort, max 1 rad>
 `
               },
               {
                 role: "user",
                 content: [
-                  { type: "text", text: "Analysera bilden och ge vikt, storlek och beskrivning enligt instruktionerna." },
+                  { type: "text", text: "Extrahera serienummer/namn och returnera ENDAST vikt och mått enligt formatet." },
                   { type: "image_url", image_url: { url: dataUrl } }
                 ]
               }
@@ -128,9 +134,7 @@ När du får en bild ska du:
 
         results.push({
           imageIndex: i + 1,
-          analysis: `Error: ${humanMsg}\nDetaljer: ${
-            typeof body === "string" ? body : JSON.stringify(body)
-          }`
+          analysis: `- Osäkerhet/antaganden: ${humanMsg}.`
         });
       } finally {
         clearTimeout(timer);
