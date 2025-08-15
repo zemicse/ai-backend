@@ -71,3 +71,8 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 
   res.json(results);
 });
+
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
