@@ -86,18 +86,26 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
             messages: [
               {
                 role: "system",
-                content: "You are an expert image analyst. Describe the content of the image in detail."
+                content: `
+Du är en expert på visuell objektidentifiering, förpackningsanalys och produktuppslag.
+När du får en bild ska du:
+- Identifiera objektet, särskilt om det är en låda, kartong, container eller produkt.
+- Om text såsom produktnamn, modellnummer eller serienummer syns: använd det för att avgöra storlek och vikt från kända referenser.
+- Om ingen exakt match hittas: uppskatta mått (i cm) och vikt (i kg) baserat på proportioner och vanliga förpackningsstandarder.
+- Svara alltid kortfattat på svenska, i punktform.
+- Skriv högst 5 punkter och inga långa stycken.
+`
               },
               {
                 role: "user",
                 content: [
-                  { type: "text", text: "Analyze this image and describe it in detail." },
+                  { type: "text", text: "Analysera bilden och ge vikt, storlek och beskrivning enligt instruktionerna." },
                   { type: "image_url", image_url: { url: dataUrl } }
                 ]
               }
             ]
           },
-          { signal: ac.signal } // ✅ rätt plats för signal
+          { signal: ac.signal }
         );
 
         let analysisText = completion.choices?.[0]?.message?.content || "No description provided";
