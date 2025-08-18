@@ -18,6 +18,102 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+/* -------------------------------------------------------
+ * HÄLSOKOLL
+ * -----------------------------------------------------*/
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+/* -------------------------------------------------------
+ * KLASSIFICERING AV ANVÄNDARINMATNING
+ * Bestämmer om vi ska hoppa direkt till progressbar
+ * eller först be om förtydligande med förslag.
+ *
+ * Request:  { prompt: string }
+ * Response: {
+ *   direct: boolean,              // true = direkt till progressbaren
+ *   category: string | null,      // grundkategori
+ *   subservice: string | null,    // om specifikt hittas
+ *   suggestions: string[]         // om direkt=false, visa dessa som knappar
+ * }
+ * -----------------------------------------------------*/
+app.post("/classify", (req, res) => {
+  const promptRaw = (req.body?.prompt || "").toString().trim();
+  if (!promptRaw) {
+    return res.status(400).json({ error: "prompt saknas" });
+  }
+  const prompt = promptRaw.toLowerCase();
+
+  // Ordbok för kategorier + nyckelord
+  const dict = {
+    "städning": {
+      general: [/^städ(ning)?$/, /städning\b/, /\bstäda\b/, /\bhemstäd\b/, /\bflyttstäd\b/],
+      specific: {
+        "Fönsterputs": [/fönsterputs(ning)?/, /putsa\s*fönster/],
+        "Flyttstädning": [/flyttstäd(ning)?/],
+        "Hemstädning": [/hemstäd(ning)?/, /veckostäd(ning)?/, /storstäd(ning)?/]
+      },
+      suggestions: ["Fönsterputs", "Hemstädning", "Flyttstädning"]
+    },
+    "trädgård": {
+      general: [/^trädgård$/, /\bträdgårds?arbete\b/, /trädgård\b/],
+      specific: {
+        "Gräsklippning": [/gräsklipp(ning)?/, /klippa\s*gräs/],
+        "Häckklippning": [/häckklipp(ning)?/, /klippa\s*häck/],
+        "Lövblåsning": [/löv(blås|blåsning)/, /kratta\s*löv/]
+      },
+      suggestions: ["Gräsklippning", "Häckklippning", "Lövblåsning"]
+    },
+    "bygg": {
+      general: [/^bygg$/, /bygg\b/, /renover(ing)?\b/],
+      specific: {
+        "Altanbygge": [/altan(bygge)?/, /bygga\s*altan/],
+        "Målning inne": [/måla\b.*(vägg|tak|inomhus)/, /inomhusmålning/],
+        "Tapetsering": [/tapet(sera|sering)/]
+      },
+      suggestions: ["Altanbygge", "Målning inne", "Tapetsering"]
+    },
+    "flytt": {
+      general: [/^flytt$/, /flytt\b/, /flytta\b/],
+      specific: {
+        "Flyttfirma": [/flyttfirma/, /bärhjälp/, /transport( av)? möbler/],
+        "Packhjälp": [/packhjälp/, /packa\b/]
+      },
+      suggestions: ["Flyttfirma", "Packhjälp", "Transport"]
+    }
+  };
+
+  // Hjälpare: hitta kategori + specificitet
+  const findCategory = (text) => {
+    for (const [cat, cfg] of Object.entries(dict)) {
+      const isGeneralMention = cfg.general.some(rx => rx.test(text));
+      // Kolla specifika först – om något subservice matchar → specifik
+      for (const [sub, arr] of Object.entries(cfg.specific)) {
+        if (arr.some(rx => rx.test(text))) {
+          return { category: cat, subservice: sub, direct: true, suggestions: [] };
+        }
+      }
+      if (isGeneralMention) {
+        return { category: cat, subservice: null, direct: false, suggestions: cfg.suggestions };
+      }
+    }
+    // Ingen träff – gissa kategori via enkla nyckelord
+    if (/fönster|puts/i.test(text)) {
+      return { category: "städning", subservice: "Fönsterputs", direct: true, suggestions: [] };
+    }
+    // default: be om förtydligande (utan kategori)
+    return { category: null, subservice: null, direct: false, suggestions: ["Städning", "Trädgård", "Bygg", "Flytt"] };
+  };
+
+  const out = findCategory(prompt);
+  return res.json(out);
+});
+
+/* -------------------------------------------------------
+ * BILDANALYS: returnerar en kort punktlista på svenska
+ * (modell/serienr/mått/vikt/ev. osäkerhet)
+ * -----------------------------------------------------*/
 app.post("/analyze", upload.array("images"), async (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: "No images uploaded" });
@@ -62,7 +158,7 @@ Format:
             }
           ]
         },
-        { signal: ac.signal }
+        { signal: ac.signal } // fetch-abort via SDK
       );
 
       let analysisText = completion.choices?.[0]?.message?.content || "No description provided";
