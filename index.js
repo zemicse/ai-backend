@@ -9,11 +9,9 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Multer setup för filuppladdning
 const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const upload = multer({ storage });
 
-// Initiera OpenAI-klienten med API-nyckel från Render miljövariabler
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -25,98 +23,79 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-/* -------------------------------------------------------
- * KLASSIFICERING AV ANVÄNDARINMATNING
- * Bestämmer om vi ska hoppa direkt till progressbar
- * eller först be om förtydligande med förslag.
- *
- * Request:  { prompt: string }
- * Response: {
- *   direct: boolean,              // true = direkt till progressbaren
- *   category: string | null,      // grundkategori
- *   subservice: string | null,    // om specifikt hittas
- *   suggestions: string[]         // om direkt=false, visa dessa som knappar
- * }
- * -----------------------------------------------------*/
-app.post("/classify", (req, res) => {
-  const promptRaw = (req.body?.prompt || "").toString().trim();
-  if (!promptRaw) {
-    return res.status(400).json({ error: "prompt saknas" });
-  }
-  const prompt = promptRaw.toLowerCase();
-
-  // Ordbok för kategorier + nyckelord
-  const dict = {
-    "städning": {
-      general: [/^städ(ning)?$/, /städning\b/, /\bstäda\b/, /\bhemstäd\b/, /\bflyttstäd\b/],
-      specific: {
-        "Fönsterputs": [/fönsterputs(ning)?/, /putsa\s*fönster/],
-        "Flyttstädning": [/flyttstäd(ning)?/],
-        "Hemstädning": [/hemstäd(ning)?/, /veckostäd(ning)?/, /storstäd(ning)?/]
-      },
-      suggestions: ["Fönsterputs", "Hemstädning", "Flyttstädning"]
-    },
-    "trädgård": {
-      general: [/^trädgård$/, /\bträdgårds?arbete\b/, /trädgård\b/],
-      specific: {
-        "Gräsklippning": [/gräsklipp(ning)?/, /klippa\s*gräs/],
-        "Häckklippning": [/häckklipp(ning)?/, /klippa\s*häck/],
-        "Lövblåsning": [/löv(blås|blåsning)/, /kratta\s*löv/]
-      },
-      suggestions: ["Gräsklippning", "Häckklippning", "Lövblåsning"]
-    },
-    "bygg": {
-      general: [/^bygg$/, /bygg\b/, /renover(ing)?\b/],
-      specific: {
-        "Altanbygge": [/altan(bygge)?/, /bygga\s*altan/],
-        "Målning inne": [/måla\b.*(vägg|tak|inomhus)/, /inomhusmålning/],
-        "Tapetsering": [/tapet(sera|sering)/]
-      },
-      suggestions: ["Altanbygge", "Målning inne", "Tapetsering"]
-    },
-    "flytt": {
-      general: [/^flytt$/, /flytt\b/, /flytta\b/],
-      specific: {
-        "Flyttfirma": [/flyttfirma/, /bärhjälp/, /transport( av)? möbler/],
-        "Packhjälp": [/packhjälp/, /packa\b/]
-      },
-      suggestions: ["Flyttfirma", "Packhjälp", "Transport"]
-    }
-  };
-
-  // Hjälpare: hitta kategori + specificitet
-  const findCategory = (text) => {
-    for (const [cat, cfg] of Object.entries(dict)) {
-      const isGeneralMention = cfg.general.some(rx => rx.test(text));
-      // Kolla specifika först – om något subservice matchar → specifik
-      for (const [sub, arr] of Object.entries(cfg.specific)) {
-        if (arr.some(rx => rx.test(text))) {
-          return { category: cat, subservice: sub, direct: true, suggestions: [] };
-        }
-      }
-      if (isGeneralMention) {
-        return { category: cat, subservice: null, direct: false, suggestions: cfg.suggestions };
-      }
-    }
-    // Ingen träff – gissa kategori via enkla nyckelord
-    if (/fönster|puts/i.test(text)) {
-      return { category: "städning", subservice: "Fönsterputs", direct: true, suggestions: [] };
-    }
-    // default: be om förtydligande (utan kategori)
-    return { category: null, subservice: null, direct: false, suggestions: ["Städning", "Trädgård", "Bygg", "Flytt"] };
-  };
-
-  const out = findCategory(prompt);
-  return res.json(out);
-});
-
-/* -------------------------------------------------------
- * BILDANALYS: returnerar en kort punktlista på svenska
- * (modell/serienr/mått/vikt/ev. osäkerhet)
- * -----------------------------------------------------*/
+/* =======================================================
+ * BILDANALYS – alltid försök ge MÅTT & VIKT
+ * 1) Försök OCR + igenkänning + specifikationer
+ * 2) Om mått/vikt saknas → gör ett kort "enrichment"-anrop
+ * =====================================================*/
 app.post("/analyze", upload.array("images"), async (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: "No images uploaded" });
+  }
+
+  const SYSTEM_PROMPT = `
+Du är en svensk produktigenkännare och specifikationsassistent.
+Ditt mål är att returnera ENDAST en kort punktlista (max 5 punkter) med dessa fem rader i denna ordning:
+
+- Produkt/serie: <text>
+- Serienummer/modell: <text>
+- Mått (L×B×H): <cm>
+- Vikt: <kg>
+- Osäkerhet/antaganden: <text>
+
+Regler:
+- Läs av all synlig text (etiketter, serienr, modell, varumärke) i bilden.
+- Om produkten är en känd serie/produkt (t.ex. IKEA GALANT, iPhone, Bosch etc.):
+  • Ange standardmått och vikt för den vanligaste varianten ur din inlärda kunskap.
+  • Om det finns flera varianter: välj den mest sannolika och nämn kort andra vanliga storlekar i "Osäkerhet/antaganden".
+- Om produkt ej känns igen: ge en rimlig uppskattning (intervall) i cm/kg baserat på proportioner och kontext.
+- Alltid centimeter för mått och kilogram för vikt.
+- Skriv kort och utan extra brödtext.
+`.trim();
+
+  // Litet hjälpbeteende för att fylla i saknade specs när vi ändå identifierat serienamnet
+  async function enrichSpecs({ product, model }) {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.1,
+      max_tokens: 180,
+      messages: [
+        {
+          role: "system",
+          content: `
+Du är en svensk produktkatalogsassistent. Om du känner till en kommersiell produkt/serie från din inlärda kunskap:
+- Ge typiska standardmått (L×B×H i cm) och vikt (kg) för den vanligaste varianten.
+- Om flera varianter finns: välj den mest vanliga men nämn alternativ kort.
+Returnera exakt JSON:
+{"maat":"L×B×H i cm","vikt":"kg","notis":"kort valfri kommentar"}`
+            .trim()
+        },
+        {
+          role: "user",
+          content: `
+Produkt/serie: ${product || "okänd"}
+Modell: ${model || "okänd"}
+
+Ge JSON enligt instruktionen.`.trim()
+        }
+      ]
+    });
+
+    const raw = completion.choices?.[0]?.message?.content?.trim() || "";
+    // Försök att hitta JSON i svaret
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+
+  function pick(line, key) {
+    const rx = new RegExp(`${key}\\s*:\\s*(.*)`, "i");
+    const m = line.match(rx);
+    return m ? m[1].trim() : null;
   }
 
   const results = [];
@@ -127,43 +106,78 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
     const dataUrl = `data:${file.mimetype};base64,${base64Image}`;
 
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 45_000); // snävare timeout
+    const timer = setTimeout(() => ac.abort(), 45_000);
 
     try {
+      // --- Första passet: OCR + igenkänning + specs
       const completion = await openai.chat.completions.create(
         {
           model: "gpt-4o-mini",
-          temperature: 0.2,
-          max_tokens: 180,
+          temperature: 0.15,
+          max_tokens: 280,
           messages: [
-            {
-              role: "system",
-              content: `
-Du extraherar produktnamn/modell/serienummer från bilder och returnerar ENBART en kort punktlista (max 5).
-Om känd produkt: ge mått i cm och vikt i kg. Annars ge rimlig uppskattning.
-Format:
-- Produkt/serie: <om säkert>
-- Serienummer/modell: <om avläst>
-- Mått (L×B×H): <cm>
-- Vikt: <kg>
-- Osäkerhet/antaganden: <kort>
-`.trim()
-            },
+            { role: "system", content: SYSTEM_PROMPT },
             {
               role: "user",
               content: [
-                { type: "text", text: "Extrahera serienummer/namn och returnera endast punktlista enligt formatet." },
+                { type: "text", text: "Analysera bilden och returnera en punktlista enligt formatet." },
                 { type: "image_url", image_url: { url: dataUrl } }
               ]
             }
           ]
         },
-        { signal: ac.signal } // fetch-abort via SDK
+        { signal: ac.signal }
       );
 
-      let analysisText = completion.choices?.[0]?.message?.content || "No description provided";
+      let analysisText = completion.choices?.[0]?.message?.content || "";
       if (typeof analysisText !== "string") {
         analysisText = JSON.stringify(analysisText, null, 2);
+      }
+
+      // --- Plocka ut fält
+      const lines = analysisText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const productLine = lines.find(l => /^-\s*Produkt\/serie:/i.test(l)) || "";
+      const modelLine   = lines.find(l => /^-\s*Serienummer\/modell:/i.test(l)) || "";
+      let maatLine      = lines.find(l => /^-\s*Mått\s*\(.*\):/i.test(l)) || "";
+      let viktLine      = lines.find(l => /^-\s*Vikt:/i.test(l)) || "";
+      const osakLineIdx = lines.findIndex(l => /^-\s*Osäkerhet\/antaganden:/i.test(l));
+
+      const product = pick(productLine, "Produkt/serie");
+      const model   = pick(modelLine, "Serienummer\\/modell");
+      let maatVal   = pick(maatLine, "Mått\\s*\\(.*\\)");
+      let viktVal   = pick(viktLine, "Vikt");
+      let osakerhet = osakLineIdx >= 0 ? lines[osakLineIdx].replace(/^-+\s*Osäkerhet\/antaganden:\s*/i, "") : "";
+
+      const needMaat = !maatVal || /osäker|okänd|n\/a|ingen/i.test(maatVal);
+      const needVikt = !viktVal || /osäker|okänd|n\/a|ingen/i.test(viktVal);
+
+      // --- Om vi saknar mått/vikt men har ett produktnamn → enrichment
+      if ((needMaat || needVikt) && product) {
+        const enrich = await enrichSpecs({ product, model });
+        if (enrich) {
+          if (needMaat && enrich.maat) maatVal = enrich.maat;
+          if (needVikt && enrich.vikt) viktVal = enrich.vikt;
+          if (enrich.notis) {
+            osakerhet = osakerhet
+              ? `${osakerhet} ${enrich.notis}`
+              : enrich.notis;
+          }
+          // Sätt tillbaka in i sina rader
+          maatLine = `- Mått (L×B×H): ${maatVal || "Osäker"}`;
+          viktLine = `- Vikt: ${viktVal || "Osäker"}`;
+          const osakLine = `- Osäkerhet/antaganden: ${osakerhet || "—"}`;
+
+          // Bygg en ren femradslista (även om originalet saknade någon rad)
+          const cleanOut = [
+            product ? `- Produkt/serie: ${product}` : "- Produkt/serie: —",
+            model ? `- Serienummer/modell: ${model}` : "- Serienummer/modell: —",
+            maatLine,
+            viktLine,
+            osakLine
+          ].join("\n");
+
+          analysisText = cleanOut;
+        }
       }
 
       results.push({ imageIndex: i + 1, analysis: analysisText });
@@ -181,7 +195,11 @@ Format:
 
       results.push({
         imageIndex: i + 1,
-        analysis: `- Osäkerhet/antaganden: ${humanMsg}.`
+        analysis: `- Produkt/serie: —
+- Serienummer/modell: —
+- Mått (L×B×H): Osäker
+- Vikt: Osäker
+- Osäkerhet/antaganden: ${humanMsg}.`
       });
     } finally {
       clearTimeout(timer);
