@@ -1,63 +1,40 @@
 // index.js
-// package.json måste ha: { "type": "module" }
 import express from "express";
 import multer from "multer";
 import cors from "cors";
 import OpenAI from "openai";
 
+// ====== BAS ======
 const app = express();
 const port = process.env.PORT || 3000;
-
 app.set("trust proxy", 1);
 
-// ===== CORS =====
-// Lägg in dina verkliga domäner här (produktion + ev. webflow-preview)
-const allowedOrigins = [
-  "https://din-domän.se",
-  "https://din-sajt.webflow.io"
-];
+// ====== CORS ======
+const corsConfig = {
+  origin: (origin, cb) => cb(null, true), // tillåt alla (lättast). Sätt annars ["https://din-domän.se"]
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  credentials: false,
+  maxAge: 86400,
+};
+app.use(cors(corsConfig));
+app.options(["/analyze","/api/analyze","/health"], cors(corsConfig));
 
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true); // tillåt t.ex. curl
-    // Tillåt om origin slutar med nån av våra kända domäner
-    if (allowedOrigins.some(o => origin.endsWith(o.replace(/^https?:\/\//, "")))) {
-      return cb(null, true);
-    }
-    // Kör öppet läge – byt till cb(new Error("Blocked by CORS")) om du vill strama åt
-    return cb(null, true);
-  },
-  methods: ["GET","POST","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
-}));
-app.options("*", cors());
+// ====== BODY/MULTER ======
+app.use(express.json({ limit: "1mb" })); // multipart hanteras av multer
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(express.json());
-
-// Multer – bilder i minne
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
-
-// OpenAI-klient
+// ====== OPENAI CLIENT ======
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Healthcheck
+// ====== HEALTH ======
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-/* =======================================================
- * /analyze – returnera punktlista:
- * - Produkt/serie
- * - Serienummer/modell
- * - Längd: <cm>
- * - Bredd: <cm>
- * - Höjd: <cm>
- * - Vikt: <kg>
- * - Osäkerhet/antaganden
- * =====================================================*/
-app.post("/analyze", upload.array("images"), async (req, res) => {
-  if (!req.files || req.files.length === 0) {
+// ====== GEMENSAM ANALYS-HANDLER ======
+async function analyzeHandler(req, res) {
+  if (!req.files || !req.files.length) {
     return res.status(400).json({ error: "No images uploaded" });
   }
 
@@ -92,7 +69,7 @@ Regler:
           role: "system",
           content: `
 Du är en svensk produktkatalogsassistent. Om du känner till en kommersiell produkt/serie från din inlärda kunskap:
-- Ge typiska standardmått för längd, bredd, höjd (cm) och vikt (kg) för den vanligaste varianten.
+- Ge typiska standardmått (cm) för L/B/H och vikt (kg) för vanligaste varianten.
 - Om flera varianter finns: välj den mest vanliga men nämn alternativ kort.
 Returnera EXAKT JSON:
 {"langd_cm":"", "bredd_cm":"", "hojd_cm":"", "vikt_kg":"", "notis":""}`.trim()
@@ -105,9 +82,9 @@ Returnera EXAKT JSON:
     });
 
     const raw = completion.choices?.[0]?.message?.content?.trim() || "";
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    try { return JSON.parse(jsonMatch[0]); } catch { return null; }
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try { return JSON.parse(match[0]); } catch { return null; }
   }
 
   function valFrom(line, key) {
@@ -120,14 +97,14 @@ Returnera EXAKT JSON:
 
   for (let i = 0; i < req.files.length; i++) {
     const file = req.files[i];
-    const base64Image = file.buffer.toString("base64");
-    const dataUrl = `data:${file.mimetype};base64,${base64Image}`;
+    const base64 = file.buffer.toString("base64");
+    const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 45_000);
 
     try {
-      // 1) OCR + igenkänning + specs
+      // 1) OCR/igenkänning + specs
       const completion = await openai.chat.completions.create(
         {
           model: "gpt-4o-mini",
@@ -148,11 +125,9 @@ Returnera EXAKT JSON:
       );
 
       let analysisText = completion.choices?.[0]?.message?.content || "";
-      if (typeof analysisText !== "string") {
-        analysisText = JSON.stringify(analysisText, null, 2);
-      }
+      if (typeof analysisText !== "string") analysisText = String(analysisText);
 
-      // 2) Plocka ut fält
+      // 2) Extrahera fält
       const lines = analysisText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       const productLine = lines.find(l => /^-\s*Produkt\/serie:/i.test(l)) || "";
       const modelLine   = lines.find(l => /^-\s*Serienummer\/modell:/i.test(l)) || "";
@@ -174,10 +149,9 @@ Returnera EXAKT JSON:
         !langd || /osäker|okänd|n\/a|ingen/i.test(langd) ||
         !bredd || /osäker|okänd|n\/a|ingen/i.test(bredd) ||
         !hojd  || /osäker|okänd|n\/a|ingen/i.test(hojd);
-      const missingWeight =
-        !vikt  || /osäker|okänd|n\/a|ingen/i.test(vikt);
+      const missingWeight = !vikt || /osäker|okänd|n\/a|ingen/i.test(vikt);
 
-      // 3) Enrichment vid känd produkt
+      // 3) Enrichment om möjligt
       if ((missingSize || missingWeight) && product) {
         const enrich = await enrichSpecs({ product, model });
         if (enrich) {
@@ -193,37 +167,31 @@ Returnera EXAKT JSON:
             osak = osak ? `${osak} ${enrich.notis}` : enrich.notis;
           }
 
-          // Syntetisera ren 7-raderslista
-          const clean = [
+          analysisText = [
             product ? `- Produkt/serie: ${product}` : "- Produkt/serie: —",
             model   ? `- Serienummer/modell: ${model}` : "- Serienummer/modell: —",
             `- Längd: ${langd || "Osäker"}`,
             `- Bredd: ${bredd || "Osäker"}`,
-            `- Höjd: ${hojd || "Osäker"}`,
-            `- Vikt: ${vikt || "Osäker"}`,
+            `- Höjd: ${hojd  || "Osäker"}`,
+            `- Vikt: ${vikt  || "Osäker"}`,
             `- Osäkerhet/antaganden: ${osak || "—"}`
           ].join("\n");
-
-          analysisText = clean;
         }
       }
 
       results.push({ imageIndex: i + 1, analysis: analysisText });
 
-    } catch (error) {
-      const status = error?.status || error?.response?.status;
-      const body = error?.response?.data || error?.message || String(error);
-      console.error("OpenAI error:", status, body);
-
+    } catch (err) {
+      const status = err?.status || err?.response?.status;
       const humanMsg =
-        error?.name === "AbortError"
-          ? "Timeout mot OpenAI (svaret tog för lång tid)."
-          : (status === 429 ? "Kvot eller rate limit nådd hos OpenAI."
-             : status ? `OpenAI-fel ${status}` : "Okänt OpenAI-fel");
-
+        err?.name === "AbortError" ? "Timeout mot OpenAI."
+        : status === 429 ? "Rate limit hos OpenAI."
+        : status ? `OpenAI-fel ${status}`
+        : "Okänt OpenAI-fel";
       results.push({
         imageIndex: i + 1,
-        analysis: `- Produkt/serie: —
+        analysis:
+`- Produkt/serie: —
 - Serienummer/modell: —
 - Längd: Osäker
 - Bredd: Osäker
@@ -237,8 +205,14 @@ Returnera EXAKT JSON:
   }
 
   res.json(results);
-});
+}
 
+// ====== ROUTER ======
+// alias så att både /analyze och /api/analyze fungerar
+app.post("/analyze", upload.array("images"), (req, res) => analyzeHandler(req, res));
+app.post("/api/analyze", upload.array("images"), (req, res) => analyzeHandler(req, res));
+
+// ====== START ======
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Server running on :${port}`);
 });
