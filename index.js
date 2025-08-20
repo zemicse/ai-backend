@@ -11,7 +11,7 @@ app.set("trust proxy", 1);
 
 // ====== CORS ======
 const corsConfig = {
-  origin: (origin, cb) => cb(null, true), // tillåt alla (lättast). Sätt annars ["https://din-domän.se"]
+  origin: (origin, cb) => cb(null, true), // tillåt alla (enkelt). Sätt annars t.ex. ["https://din-domän.se"]
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   credentials: false,
@@ -34,7 +34,8 @@ app.get("/health", (_req, res) => {
 
 // ====== GEMENSAM ANALYS-HANDLER ======
 async function analyzeHandler(req, res) {
-  if (!req.files || !req.files.length) {
+  const files = req.files || [];
+  if (!files.length) {
     return res.status(400).json({ error: "No images uploaded" });
   }
 
@@ -93,15 +94,13 @@ Returnera EXAKT JSON:
     return m ? m[1].trim() : null;
   }
 
-  const results = [];
-
-  for (let i = 0; i < req.files.length; i++) {
-    const file = req.files[i];
+  // === En bild → svar ===
+  async function analyzeOne(file, index) {
     const base64 = file.buffer.toString("base64");
     const dataUrl = `data:${file.mimetype};base64,${base64}`;
 
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 45_000);
+    const timer = setTimeout(() => ac.abort("OpenAI timeout (45s)"), 45_000);
 
     try {
       // 1) OCR/igenkänning + specs
@@ -151,7 +150,7 @@ Returnera EXAKT JSON:
         !hojd  || /osäker|okänd|n\/a|ingen/i.test(hojd);
       const missingWeight = !vikt || /osäker|okänd|n\/a|ingen/i.test(vikt);
 
-      // 3) Enrichment om möjligt
+      // 3) Enrichment vid behov
       if ((missingSize || missingWeight) && product) {
         const enrich = await enrichSpecs({ product, model });
         if (enrich) {
@@ -179,7 +178,7 @@ Returnera EXAKT JSON:
         }
       }
 
-      results.push({ imageIndex: i + 1, analysis: analysisText });
+      return { imageIndex: index + 1, analysis: analysisText };
 
     } catch (err) {
       const status = err?.status || err?.response?.status;
@@ -187,21 +186,33 @@ Returnera EXAKT JSON:
         err?.name === "AbortError" ? "Timeout mot OpenAI."
         : status === 429 ? "Rate limit hos OpenAI."
         : status ? `OpenAI-fel ${status}`
-        : "Okänt OpenAI-fel";
-      results.push({
-        imageIndex: i + 1,
+        : (err?.message || "Okänt OpenAI-fel");
+
+      return {
+        imageIndex: index + 1,
         analysis:
-`- Produkt/serie: —
-- Serienummer/modell: —
+`- Produkt/serie: — 
+- Serienummer/modell: — 
 - Längd: Osäker
 - Bredd: Osäker
 - Höjd: Osäker
 - Vikt: Osäker
-- Osäkerhet/antaganden: ${humanMsg}.`
-      });
+- Osäkerhet/antaganden: ${humanMsg}`
+      };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  // === Kör med låg parallellism (tål flera bilder utan att bli långsamt) ===
+  const results = new Array(files.length);
+  const concurrency = 2; // håll låg för att undvika rate limits
+  for (let i = 0; i < files.length; i += concurrency) {
+    const slice = files.slice(i, i + concurrency);
+    const partial = await Promise.all(
+      slice.map((f, j) => analyzeOne(f, i + j))
+    );
+    partial.forEach((r, j) => { results[i + j] = r; });
   }
 
   res.json(results);
