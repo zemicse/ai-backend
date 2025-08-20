@@ -16,17 +16,21 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-/* -------------------------------------------------------
- * HÄLSOKOLL
- * -----------------------------------------------------*/
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
 /* =======================================================
- * BILDANALYS – alltid försök ge MÅTT & VIKT
- * 1) Försök OCR + igenkänning + specifikationer
- * 2) Om mått/vikt saknas → gör ett kort "enrichment"-anrop
+ * /analyze – returnera punktlista:
+ * - Produkt/serie
+ * - Serienummer/modell
+ * - Längd: <cm>
+ * - Bredd: <cm>
+ * - Höjd: <cm>
+ * - Vikt: <kg>
+ * - Osäkerhet/antaganden
+ * Om känd serie → standardmått/vikt. Annars rimlig uppskattning.
+ * Om mått/vikt saknas → enrichment-fråga med produkt/serie.
  * =====================================================*/
 app.post("/analyze", upload.array("images"), async (req, res) => {
   if (!req.files || req.files.length === 0) {
@@ -35,64 +39,54 @@ app.post("/analyze", upload.array("images"), async (req, res) => {
 
   const SYSTEM_PROMPT = `
 Du är en svensk produktigenkännare och specifikationsassistent.
-Ditt mål är att returnera ENDAST en kort punktlista (max 5 punkter) med dessa fem rader i denna ordning:
+Returnera ENDAST en kort punktlista (max 7 punkter) med raderna i exakt denna ordning:
 
 - Produkt/serie: <text>
 - Serienummer/modell: <text>
-- Mått (L×B×H): <cm>
+- Längd: <cm>
+- Bredd: <cm>
+- Höjd: <cm>
 - Vikt: <kg>
 - Osäkerhet/antaganden: <text>
 
 Regler:
-- Läs av all synlig text (etiketter, serienr, modell, varumärke) i bilden.
-- Om produkten är en känd serie/produkt (t.ex. IKEA GALANT, iPhone, Bosch etc.):
-  • Ange standardmått och vikt för den vanligaste varianten ur din inlärda kunskap.
-  • Om det finns flera varianter: välj den mest sannolika och nämn kort andra vanliga storlekar i "Osäkerhet/antaganden".
-- Om produkt ej känns igen: ge en rimlig uppskattning (intervall) i cm/kg baserat på proportioner och kontext.
-- Alltid centimeter för mått och kilogram för vikt.
+- Läs etiketter/varunummer/serienummer om de syns.
+- Om produkten är en känd serie (t.ex. IKEA, Bosch, Apple m.fl.), ange standardmått och vikt för den vanligaste varianten utifrån din inlärda kunskap.
+- Om flera varianter finns: välj den mest sannolika och nämn alternativ kort i sista raden.
+- Om okänd: ge rimlig uppskattning i cm/kg (skriv "uppskattat" när det är en uppskattning).
+- Enheter: alltid centimeter (cm) för mått och kilogram (kg) för vikt.
 - Skriv kort och utan extra brödtext.
 `.trim();
 
-  // Litet hjälpbeteende för att fylla i saknade specs när vi ändå identifierat serienamnet
   async function enrichSpecs({ product, model }) {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.1,
-      max_tokens: 180,
+      max_tokens: 200,
       messages: [
         {
           role: "system",
           content: `
 Du är en svensk produktkatalogsassistent. Om du känner till en kommersiell produkt/serie från din inlärda kunskap:
-- Ge typiska standardmått (L×B×H i cm) och vikt (kg) för den vanligaste varianten.
+- Ge typiska standardmått för längd, bredd, höjd (cm) och vikt (kg) för den vanligaste varianten.
 - Om flera varianter finns: välj den mest vanliga men nämn alternativ kort.
-Returnera exakt JSON:
-{"maat":"L×B×H i cm","vikt":"kg","notis":"kort valfri kommentar"}`
-            .trim()
+Returnera EXAKT JSON:
+{"langd_cm":"", "bredd_cm":"", "hojd_cm":"", "vikt_kg":"", "notis":""}`.trim()
         },
         {
           role: "user",
-          content: `
-Produkt/serie: ${product || "okänd"}
-Modell: ${model || "okänd"}
-
-Ge JSON enligt instruktionen.`.trim()
+          content: `Produkt/serie: ${product || "okänd"}\nModell: ${model || "okänd"}\n\nGe JSON enligt instruktionen.`
         }
       ]
     });
 
     const raw = completion.choices?.[0]?.message?.content?.trim() || "";
-    // Försök att hitta JSON i svaret
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return null;
-    try {
-      return JSON.parse(jsonMatch[0]);
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(jsonMatch[0]); } catch { return null; }
   }
 
-  function pick(line, key) {
+  function valFrom(line, key) {
     const rx = new RegExp(`${key}\\s*:\\s*(.*)`, "i");
     const m = line.match(rx);
     return m ? m[1].trim() : null;
@@ -109,18 +103,18 @@ Ge JSON enligt instruktionen.`.trim()
     const timer = setTimeout(() => ac.abort(), 45_000);
 
     try {
-      // --- Första passet: OCR + igenkänning + specs
+      // 1) Första passet – OCR + igenkänning + specs
       const completion = await openai.chat.completions.create(
         {
           model: "gpt-4o-mini",
           temperature: 0.15,
-          max_tokens: 280,
+          max_tokens: 320,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             {
               role: "user",
               content: [
-                { type: "text", text: "Analysera bilden och returnera en punktlista enligt formatet." },
+                { type: "text", text: "Analysera bilden och returnera punktlista exakt enligt formatet." },
                 { type: "image_url", image_url: { url: dataUrl } }
               ]
             }
@@ -134,49 +128,59 @@ Ge JSON enligt instruktionen.`.trim()
         analysisText = JSON.stringify(analysisText, null, 2);
       }
 
-      // --- Plocka ut fält
+      // 2) Plocka ut fält från första svaret
       const lines = analysisText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       const productLine = lines.find(l => /^-\s*Produkt\/serie:/i.test(l)) || "";
       const modelLine   = lines.find(l => /^-\s*Serienummer\/modell:/i.test(l)) || "";
-      let maatLine      = lines.find(l => /^-\s*Mått\s*\(.*\):/i.test(l)) || "";
-      let viktLine      = lines.find(l => /^-\s*Vikt:/i.test(l)) || "";
-      const osakLineIdx = lines.findIndex(l => /^-\s*Osäkerhet\/antaganden:/i.test(l));
+      let langdLine     = lines.find(l => /^-\s*Längd:/i.test(l)) || "";
+      let breddLine     = lines.find(l => /^-\s*Bredd:/i.test(l)) || "";
+      let hojdLine      = lines.find(l => /^-\s*Höjd:/i.test(l))  || "";
+      let viktLine      = lines.find(l => /^-\s*Vikt:/i.test(l))  || "";
+      const osakIdx     = lines.findIndex(l => /^-\s*Osäkerhet\/antaganden:/i.test(l));
 
-      const product = pick(productLine, "Produkt/serie");
-      const model   = pick(modelLine, "Serienummer\\/modell");
-      let maatVal   = pick(maatLine, "Mått\\s*\\(.*\\)");
-      let viktVal   = pick(viktLine, "Vikt");
-      let osakerhet = osakLineIdx >= 0 ? lines[osakLineIdx].replace(/^-+\s*Osäkerhet\/antaganden:\s*/i, "") : "";
+      const product = valFrom(productLine, "Produkt\\/serie");
+      const model   = valFrom(modelLine,   "Serienummer\\/modell");
+      let langd     = valFrom(langdLine,   "Längd");
+      let bredd     = valFrom(breddLine,   "Bredd");
+      let hojd      = valFrom(hojdLine,    "Höjd");
+      let vikt      = valFrom(viktLine,    "Vikt");
+      let osak      = osakIdx >= 0 ? lines[osakIdx].replace(/^-+\s*Osäkerhet\/antaganden:\s*/i, "") : "";
 
-      const needMaat = !maatVal || /osäker|okänd|n\/a|ingen/i.test(maatVal);
-      const needVikt = !viktVal || /osäker|okänd|n\/a|ingen/i.test(viktVal);
+      const missingSize =
+        !langd || /osäker|okänd|n\/a|ingen/i.test(langd) ||
+        !bredd || /osäker|okänd|n\/a|ingen/i.test(bredd) ||
+        !hojd  || /osäker|okänd|n\/a|ingen/i.test(hojd);
+      const missingWeight =
+        !vikt  || /osäker|okänd|n\/a|ingen/i.test(vikt);
 
-      // --- Om vi saknar mått/vikt men har ett produktnamn → enrichment
-      if ((needMaat || needVikt) && product) {
+      // 3) Enrichment om vi saknar något och produkt är känd
+      if ((missingSize || missingWeight) && product) {
         const enrich = await enrichSpecs({ product, model });
         if (enrich) {
-          if (needMaat && enrich.maat) maatVal = enrich.maat;
-          if (needVikt && enrich.vikt) viktVal = enrich.vikt;
-          if (enrich.notis) {
-            osakerhet = osakerhet
-              ? `${osakerhet} ${enrich.notis}`
-              : enrich.notis;
+          if (missingSize) {
+            if (enrich.langd_cm) langd = `${enrich.langd_cm} cm`;
+            if (enrich.bredd_cm) bredd = `${enrich.bredd_cm} cm`;
+            if (enrich.hojd_cm)  hojd  = `${enrich.hojd_cm} cm`;
           }
-          // Sätt tillbaka in i sina rader
-          maatLine = `- Mått (L×B×H): ${maatVal || "Osäker"}`;
-          viktLine = `- Vikt: ${viktVal || "Osäker"}`;
-          const osakLine = `- Osäkerhet/antaganden: ${osakerhet || "—"}`;
+          if (missingWeight && enrich.vikt_kg) {
+            vikt = `${enrich.vikt_kg} kg`;
+          }
+          if (enrich.notis) {
+            osak = osak ? `${osak} ${enrich.notis}` : enrich.notis;
+          }
 
-          // Bygg en ren femradslista (även om originalet saknade någon rad)
-          const cleanOut = [
+          // Syntetisera ren 7-raderslista
+          const clean = [
             product ? `- Produkt/serie: ${product}` : "- Produkt/serie: —",
-            model ? `- Serienummer/modell: ${model}` : "- Serienummer/modell: —",
-            maatLine,
-            viktLine,
-            osakLine
+            model   ? `- Serienummer/modell: ${model}` : "- Serienummer/modell: —",
+            `- Längd: ${langd || "Osäker"}`,
+            `- Bredd: ${bredd || "Osäker"}`,
+            `- Höjd: ${hojd || "Osäker"}`,
+            `- Vikt: ${vikt || "Osäker"}`,
+            `- Osäkerhet/antaganden: ${osak || "—"}`
           ].join("\n");
 
-          analysisText = cleanOut;
+          analysisText = clean;
         }
       }
 
@@ -197,7 +201,9 @@ Ge JSON enligt instruktionen.`.trim()
         imageIndex: i + 1,
         analysis: `- Produkt/serie: —
 - Serienummer/modell: —
-- Mått (L×B×H): Osäker
+- Längd: Osäker
+- Bredd: Osäker
+- Höjd: Osäker
 - Vikt: Osäker
 - Osäkerhet/antaganden: ${humanMsg}.`
       });
