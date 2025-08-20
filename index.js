@@ -1,3 +1,5 @@
+// index.js
+// package.json måste ha: { "type": "module" }
 import express from "express";
 import multer from "multer";
 import cors from "cors";
@@ -6,16 +8,40 @@ import OpenAI from "openai";
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
+app.set("trust proxy", 1);
+
+// ===== CORS =====
+// Lägg in dina verkliga domäner här (produktion + ev. webflow-preview)
+const allowedOrigins = [
+  "https://din-domän.se",
+  "https://din-sajt.webflow.io"
+];
+
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // tillåt t.ex. curl
+    // Tillåt om origin slutar med nån av våra kända domäner
+    if (allowedOrigins.some(o => origin.endsWith(o.replace(/^https?:\/\//, "")))) {
+      return cb(null, true);
+    }
+    // Kör öppet läge – byt till cb(new Error("Blocked by CORS")) om du vill strama åt
+    return cb(null, true);
+  },
+  methods: ["GET","POST","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+app.options("*", cors());
+
 app.use(express.json());
 
+// Multer – bilder i minne
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// OpenAI-klient
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Healthcheck
 app.get("/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
@@ -29,8 +55,6 @@ app.get("/health", (_req, res) => {
  * - Höjd: <cm>
  * - Vikt: <kg>
  * - Osäkerhet/antaganden
- * Om känd serie → standardmått/vikt. Annars rimlig uppskattning.
- * Om mått/vikt saknas → enrichment-fråga med produkt/serie.
  * =====================================================*/
 app.post("/analyze", upload.array("images"), async (req, res) => {
   if (!req.files || req.files.length === 0) {
@@ -103,7 +127,7 @@ Returnera EXAKT JSON:
     const timer = setTimeout(() => ac.abort(), 45_000);
 
     try {
-      // 1) Första passet – OCR + igenkänning + specs
+      // 1) OCR + igenkänning + specs
       const completion = await openai.chat.completions.create(
         {
           model: "gpt-4o-mini",
@@ -128,7 +152,7 @@ Returnera EXAKT JSON:
         analysisText = JSON.stringify(analysisText, null, 2);
       }
 
-      // 2) Plocka ut fält från första svaret
+      // 2) Plocka ut fält
       const lines = analysisText.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
       const productLine = lines.find(l => /^-\s*Produkt\/serie:/i.test(l)) || "";
       const modelLine   = lines.find(l => /^-\s*Serienummer\/modell:/i.test(l)) || "";
@@ -153,7 +177,7 @@ Returnera EXAKT JSON:
       const missingWeight =
         !vikt  || /osäker|okänd|n\/a|ingen/i.test(vikt);
 
-      // 3) Enrichment om vi saknar något och produkt är känd
+      // 3) Enrichment vid känd produkt
       if ((missingSize || missingWeight) && product) {
         const enrich = await enrichSpecs({ product, model });
         if (enrich) {
